@@ -3,6 +3,8 @@
 
 using Microsoft.Azure.Devices.Shared;
 using System;
+using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Microsoft.Azure.Devices.Client.Samples
@@ -16,26 +18,43 @@ namespace Microsoft.Azure.Devices.Client.Samples
             _deviceClient = deviceClient ?? throw new ArgumentNullException(nameof(deviceClient));
         }
 
-        public async Task RunSampleAsync()
+        public async Task RunSampleAsync(TimeSpan sampleRunningTime)
         {
-            await _deviceClient.SetDesiredPropertyUpdateCallbackAsync(OnDesiredPropertyChangedAsync, null).ConfigureAwait(false);
+            await _deviceClient.SetDesiredPropertyUpdateCallbackAsync(OnDesiredPropertyChangedAsync, null);
 
             Console.WriteLine("Retrieving twin...");
-            Twin twin = await _deviceClient.GetTwinAsync().ConfigureAwait(false);
+            Twin twin = await _deviceClient.GetTwinAsync();
 
             Console.WriteLine("\tInitial twin value received:");
             Console.WriteLine($"\t{twin.ToJson()}");
 
             Console.WriteLine("Sending sample start time as reported property");
             TwinCollection reportedProperties = new TwinCollection();
-            reportedProperties["DateTimeLastAppLaunch"] = DateTime.Now;
+            reportedProperties["DateTimeLastAppLaunch"] = DateTime.UtcNow;
 
-            await _deviceClient.UpdateReportedPropertiesAsync(reportedProperties).ConfigureAwait(false);
+            await _deviceClient.UpdateReportedPropertiesAsync(reportedProperties);
 
-            Console.WriteLine("Waiting 30 seconds for IoT Hub Twin updates...");
-            Console.WriteLine($"Use the IoT Hub Azure Portal to change the Twin desired properties within this time.");
+            Console.WriteLine("Press Control+C to quit the sample.");
+            using var cts = new CancellationTokenSource(sampleRunningTime);
+            Console.CancelKeyPress += (sender, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                cts.Cancel();
+                Console.WriteLine("Cancellation requested; will exit.");
+            };
 
-            await Task.Delay(30 * 1000);
+            var timer = Stopwatch.StartNew();
+            Console.WriteLine($"Use the IoT Hub Azure Portal or IoT Explorer utility to change the twin desired properties.");
+
+            Console.WriteLine($"Waiting up to {sampleRunningTime} for receiving twin desired property updates ...");
+            while (!cts.IsCancellationRequested
+                && timer.Elapsed < sampleRunningTime)
+            {
+                await Task.Delay(1000);
+            }
+
+            // This is how one can unsubscribe a callback for properties using a null callback handler.
+            await _deviceClient.SetDesiredPropertyUpdateCallbackAsync(null, null);
         }
 
         private async Task OnDesiredPropertyChangedAsync(TwinCollection desiredProperties, object userContext)
@@ -45,9 +64,9 @@ namespace Microsoft.Azure.Devices.Client.Samples
 
             Console.WriteLine("\tSending current time as reported property");
             TwinCollection reportedProperties = new TwinCollection();
-            reportedProperties["DateTimeLastDesiredPropertyChangeReceived"] = DateTime.Now;
+            reportedProperties["DateTimeLastDesiredPropertyChangeReceived"] = DateTime.UtcNow;
 
-            await _deviceClient.UpdateReportedPropertiesAsync(reportedProperties).ConfigureAwait(false);
+            await _deviceClient.UpdateReportedPropertiesAsync(reportedProperties);
         }
     }
 }

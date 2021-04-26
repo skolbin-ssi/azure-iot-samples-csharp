@@ -6,6 +6,8 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Text.Json.Serialization;
 using System.Text.Json;
+using System.Threading;
+using System.Diagnostics;
 
 namespace Microsoft.Azure.Devices.Client.Samples
 {
@@ -24,42 +26,61 @@ namespace Microsoft.Azure.Devices.Client.Samples
             _deviceClient = deviceClient ?? throw new ArgumentNullException(nameof(deviceClient));
         }
 
-        public async Task RunSampleAsync()
+        public async Task RunSampleAsync(TimeSpan sampleRunningTime)
         {
             _deviceClient.SetConnectionStatusChangesHandler(ConnectionStatusChangeHandler);
 
             // Method Call processing will be enabled when the first method handler is added.
             // Setup a callback for the 'WriteToConsole' method.
-            await _deviceClient
-                .SetMethodHandlerAsync("WriteToConsole", WriteToConsoleAsync, null)
-                .ConfigureAwait(false);
+            await _deviceClient.SetMethodHandlerAsync("WriteToConsole", WriteToConsoleAsync, null);
 
             // Setup a callback for the 'GetDeviceName' method.
-            await _deviceClient
-                .SetMethodHandlerAsync("GetDeviceName", GetDeviceNameAsync, new DeviceData { Name = "DeviceClientMethodSample" })
-                .ConfigureAwait(false);
+            await _deviceClient.SetMethodHandlerAsync(
+                "GetDeviceName",
+                GetDeviceNameAsync,
+                new DeviceData { Name = "DeviceClientMethodSample" });
 
-            Console.WriteLine("Waiting 30 seconds for IoT Hub method calls ...");
+            Console.WriteLine("Press Control+C to quit the sample.");
+            using var cts = new CancellationTokenSource(sampleRunningTime);
+            Console.CancelKeyPress += (sender, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                cts.Cancel();
+                Console.WriteLine("Sample execution cancellation requested; will exit.");
+            };
 
+            var timer = Stopwatch.StartNew();
             Console.WriteLine($"Use the IoT Hub Azure Portal to call methods GetDeviceName or WriteToConsole within this time.");
-            await Task.Delay(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+
+            Console.WriteLine($"Waiting up to {sampleRunningTime} for IoT Hub method calls ...");
+            while (!cts.IsCancellationRequested
+                && timer.Elapsed < sampleRunningTime)
+            {
+                await Task.Delay(1000);
+            }
+
+            // You can unsubscribe from receiving a callback for direct methods by setting a null callback handler.
+            await _deviceClient.SetMethodHandlerAsync(
+                "GetDeviceName",
+                null,
+                null);
+
+            await _deviceClient.SetMethodHandlerAsync(
+                "WriteToConsole",
+                null,
+                null);
         }
 
         private void ConnectionStatusChangeHandler(ConnectionStatus status, ConnectionStatusChangeReason reason)
         {
-            Console.WriteLine();
-            Console.WriteLine($"Connection status changed to {status}.");
-            Console.WriteLine($"Connection status changed reason is {reason}.");
-            Console.WriteLine();
+            Console.WriteLine($"\nConnection status changed to {status}.");
+            Console.WriteLine($"Connection status changed reason is {reason}.\n");
         }
 
         private Task<MethodResponse> WriteToConsoleAsync(MethodRequest methodRequest, object userContext)
         {
             Console.WriteLine($"\t *** {methodRequest.Name} was called.");
-
-            Console.WriteLine();
-            Console.WriteLine("\t{0}", methodRequest.DataAsJson);
-            Console.WriteLine();
+            Console.WriteLine($"\t{methodRequest.DataAsJson}\n");
 
             return Task.FromResult(new MethodResponse(new byte[0], 200));
         }
@@ -75,8 +96,8 @@ namespace Microsoft.Azure.Devices.Client.Samples
             }
             else
             {
-                var d = userContext as DeviceData;
-                string result = JsonSerializer.Serialize(d);
+                var deviceData = (DeviceData)userContext;
+                string result = JsonSerializer.Serialize(deviceData);
                 retValue = new MethodResponse(Encoding.UTF8.GetBytes(result), 200);
             }
 
